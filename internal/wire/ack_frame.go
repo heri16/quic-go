@@ -42,19 +42,45 @@ func ParseAckFrame(r *bytes.Reader, version protocol.VersionNumber) (*AckFrame, 
 		return nil, err
 	}
 
-	hasMissingRanges := false
-	if typeByte&0x20 == 0x20 {
+	var hasMissingRanges bool
+	if (version.UsesIETFAckFrame() && typeByte&0x10 == 0x10) || (!version.UsesIETFAckFrame() && typeByte&0x20 == 0x20) {
 		hasMissingRanges = true
 	}
 
-	largestAckedLen := 2 * ((typeByte & 0x0C) >> 2)
-	if largestAckedLen == 0 {
-		largestAckedLen = 1
+	var largestAckedLen uint8
+	if version.UsesIETFAckFrame() {
+		largestAckedLen = 1 << ((typeByte & 0x0c) >> 2)
+	} else {
+		largestAckedLen = 2 * ((typeByte & 0x0c) >> 2)
+		if largestAckedLen == 0 {
+			largestAckedLen = 1
+		}
 	}
 
-	missingSequenceNumberDeltaLen := 2 * (typeByte & 0x03)
-	if missingSequenceNumberDeltaLen == 0 {
-		missingSequenceNumberDeltaLen = 1
+	var missingSequenceNumberDeltaLen uint8
+	if version.UsesIETFAckFrame() {
+		missingSequenceNumberDeltaLen = 1 << (typeByte & 0x03)
+	} else {
+		missingSequenceNumberDeltaLen = 2 * (typeByte & 0x03)
+		if missingSequenceNumberDeltaLen == 0 {
+			missingSequenceNumberDeltaLen = 1
+		}
+	}
+
+	var numAckBlocks uint8
+	if version.UsesIETFAckFrame() && hasMissingRanges {
+		numAckBlocks, err = r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var numTimestamps uint8
+	if version.UsesIETFAckFrame() {
+		numTimestamps, err = r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	largestAcked, err := utils.GetByteOrder(version).ReadUintN(r, largestAckedLen)
@@ -69,8 +95,7 @@ func ParseAckFrame(r *bytes.Reader, version protocol.VersionNumber) (*AckFrame, 
 	}
 	frame.DelayTime = time.Duration(delay) * time.Microsecond
 
-	var numAckBlocks uint8
-	if hasMissingRanges {
+	if !version.UsesIETFAckFrame() && hasMissingRanges {
 		numAckBlocks, err = r.ReadByte()
 		if err != nil {
 			return nil, err
@@ -154,13 +179,14 @@ func ParseAckFrame(r *bytes.Reader, version protocol.VersionNumber) (*AckFrame, 
 		return nil, ErrInvalidAckRanges
 	}
 
-	var numTimestamp byte
-	numTimestamp, err = r.ReadByte()
-	if err != nil {
-		return nil, err
+	if !version.UsesIETFAckFrame() {
+		numTimestamps, err = r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	if numTimestamp > 0 {
+	if numTimestamps > 0 {
 		// Delta Largest acked
 		_, err = r.ReadByte()
 		if err != nil {
@@ -172,7 +198,7 @@ func ParseAckFrame(r *bytes.Reader, version protocol.VersionNumber) (*AckFrame, 
 			return nil, err
 		}
 
-		for i := 0; i < int(numTimestamp)-1; i++ {
+		for i := 0; i < int(numTimestamps)-1; i++ {
 			// Delta Largest acked
 			_, err = r.ReadByte()
 			if err != nil {

@@ -274,7 +274,7 @@ func (s *stream) GetDataForWriting(maxBytes protocol.ByteCount) []byte {
 	}
 
 	// TODO(#657): Flow control for the crypto stream
-	if s.streamID != 1 {
+	if s.streamID >= 2 {
 		maxBytes = utils.MinByteCount(maxBytes, s.flowController.SendWindowSize())
 	}
 	if maxBytes == 0 {
